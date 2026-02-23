@@ -8,9 +8,9 @@ python -m venv .venv
 ```
 4. Activar entorno virtual:
 ```bash
-python .venv/Scripts/activate
+.venv/Scripts/activate
 ```
 5. Instalar dependecias (Desde la carpeta test)
 ```bash
-pip install -r requirements
+pip install -r requirements.txt
 ```
