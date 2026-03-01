@@ -4,9 +4,12 @@ import pygetwindow as gw
 from mss import mss
 import time
 
+# Bananas relevantes están a la derecha de Kong, en cualquier altura
+ROI_BANANAS = (250, 60, 960, 510)
+
 class DetectorBananas:
     def __init__(self):
-        self.titulo = "BlueStacks"  # Busca por este título
+        self.titulo = "BlueStacks"
         self.ventana = None
         self.sct = mss()
         self.actualizar_ventana()
@@ -30,28 +33,23 @@ class DetectorBananas:
         if not self.actualizar_ventana():
             print("No encuentro BlueStacks")
             return None
-        
         screenshot = self.sct.grab(self.monitor)
         frame = np.array(screenshot)
         return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
     
     def detectar_bananas(self, frame):
         if frame is None:
-            return 0, None
-            
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        
-        ''' Por esto (banana kong amarillo puro):
-        amarillo_bajo = np.array([18, 120, 150])
-        amarillo_alto = np.array([32, 255, 255])
-        '''
+            return 0, None, []
+
+        x0, y0, x1, y1 = ROI_BANANAS
+        roi = frame[y0:y1, x0:x1]
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
         amarillo_bajo = np.array([21, 120, 150])
         amarillo_alto = np.array([32, 255, 255])
 
         mascara = cv2.inRange(hsv, amarillo_bajo, amarillo_alto)
-        
-        # Sin filtros extra, solo limpieza básica
         mascara = cv2.erode(mascara, None, iterations=1)
         mascara = cv2.dilate(mascara, None, iterations=1)
         
@@ -59,48 +57,44 @@ class DetectorBananas:
         
         bananas = 0
         frame_resultado = frame.copy()
+        contornos_validos = []
         
-        # Dibujar TODOS los contornos sin filtrar por área
         for i, contorno in enumerate(contornos):
             area = cv2.contourArea(contorno)
             x, y, w, h = cv2.boundingRect(contorno)
             
-            # Después (ajusta según resolución de BlueStacks):
-            MIN_AREA = 40   # Banana pequeña ~100-800 px²
-            MAX_AREA = 200   # Banana grande ~3000-6000 px²
+            MIN_AREA = 40
+            MAX_AREA = 200
 
             if not (MIN_AREA < area < MAX_AREA):
                 continue
         
-            x, y, w, h = cv2.boundingRect(contorno)
             ratio = w / h if h > 0 else 0
-
-            # Las bananas en Banana Kong tienen ratio ~1.8 a 4.0
             if not (0.5 < ratio < 4):
                 continue
 
-            
-            # Bonus: también puedes filtrar por solidez
             hull = cv2.convexHull(contorno)
             solidez = area / cv2.contourArea(hull) if cv2.contourArea(hull) > 0 else 0
-            if solidez < 0.6:   # Forma muy irregular → no es banana
+            if solidez < 0.6:
                 continue
             
+            # Convertir coordenadas a frame completo
+            x_real = x + x0
+            y_real = y + y0
+
             bananas += 1
-            cv2.rectangle(frame_resultado, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(frame_resultado, f"{area:.0f}", (x, y-5),
+            # Desplazar contorno a coordenadas del frame completo
+            contorno_desplazado = contorno + np.array([x0, y0])
+            contornos_validos.append(contorno_desplazado)
+            cv2.rectangle(frame_resultado, (x_real, y_real), (x_real+w, y_real+h), (0, 255, 0), 2)
+            cv2.putText(frame_resultado, f"{area:.0f}", (x_real, y_real-5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
         
-        # Mostrar máscara para depuración
-        #cv2.imshow('Mascara', mascara)
-        #cv2.moveWindow('Mascara', 800, 100)
-        
-        return bananas, frame_resultado
+        return bananas, frame_resultado, contornos_validos
     
     def probar(self):
         print("=== DETECTOR DE BANANAS ===")
         print("BlueStacks detectado automáticamente")
-        print("Puedes mover BlueStacks donde quieras")
         print("Presiona 'q' para salir")
         print("Presiona 's' para guardar frame")
         time.sleep(2)
@@ -108,22 +102,19 @@ class DetectorBananas:
         cv2.namedWindow('Detector')
         
         while True:
-            # Capturar (siempre busca la ventana actualizada)
             frame = self.capturar_pantalla()
             if frame is None:
                 print("Esperando BlueStacks...")
                 time.sleep(1)
                 continue
             
-            # Detectar bananas
-            cantidad, frame_con_marcas = self.detectar_bananas(frame)
+            cantidad, frame_con_marcas, _ = self.detectar_bananas(frame)
             
-            # Mostrar info
             cv2.putText(frame_con_marcas, f"Bananas: {cantidad}", (10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
             
             cv2.imshow('Detector', frame_con_marcas)
-            cv2.moveWindow('Detector', 100, 100)  # Posición fija para la ventana de captura
+            cv2.moveWindow('Detector', 100, 100)
             
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -133,6 +124,6 @@ class DetectorBananas:
         
         cv2.destroyAllWindows()
 
-# Ejecutar
-detector = DetectorBananas()
-detector.probar()
+if __name__ == "__main__":
+    detector = DetectorBananas()
+    detector.probar()
