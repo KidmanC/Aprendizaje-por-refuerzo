@@ -1,0 +1,27 @@
+# Modelos entrenados (pueden pesar cientos de MB)
+modelos/
+*.zip
+
+# Logs de TensorBoard
+logs/
+
+# Capturas de debug que generan los detectores
+*.png
+!templates/          # excepto los templates — esos SÍ deben subir
+!templates/*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+env/
+
+# Screenshots guardados durante pruebas (s=guardar en los detectores)
+barril_*.png
+muros_*.png
+kong_*.png
+
+# Checkpoints intermedios (opcionales, pesan mucho)
+modelos/checkpoints/
