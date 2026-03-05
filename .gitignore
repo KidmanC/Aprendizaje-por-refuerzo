@@ -7,8 +7,9 @@ logs/
 
 # Capturas de debug que generan los detectores
 *.png
-!templates/          # excepto los templates — esos SÍ deben subir
-!templates/*.png
+!deteccion/
+!deteccion/templates/          # excepto los templates — esos SÍ deben subir
+!deteccion/templates/*.png
 
 # Python
 __pycache__/
@@ -17,11 +18,6 @@ __pycache__/
 .env
 venv/
 env/
-
-# Screenshots guardados durante pruebas (s=guardar en los detectores)
-barril_*.png
-muros_*.png
-kong_*.png
 
 # Checkpoints intermedios (opcionales, pesan mucho)
 modelos/checkpoints/
