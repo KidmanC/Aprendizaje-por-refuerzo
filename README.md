@@ -18,7 +18,7 @@
 8. [Implementación Técnica](#8-implementación-técnica)
 9. [Requerimientos](#9-requerimientos)
 10. [Criterios de Aceptación](#10-criterios-de-aceptación)
-11. [Plan de Trabajo](#11-plan-de-trabajo)
+11. [Cronograma del Proyecto](#11-cronograma-del-proyecto)
 12. [Instalación y Uso](#12-instalación-y-uso)
 13. [Referencias](#13-referencias)
 
@@ -77,7 +77,7 @@ Los videojuegos comerciales son sistemas de caja negra: no exponen su estado int
 ### Incluido
 
 - Pipeline completo: captura → percepción → decisión → acción
-- Detectores especializados para: Kong, barriles, bananas, agua, muros (madera y piedra), game over
+- Detectores especializados para: Kong, barriles, bananas, agua, rocas, muros (madera y piedra), game over
 - Entorno compatible con la interfaz OpenAI Gymnasium
 - Entrenamiento con PPO usando Stable-Baselines3
 - Reinicio automático de episodios
@@ -87,7 +87,7 @@ Los videojuegos comerciales son sistemas de caja negra: no exponen su estado int
 ### Excluido
 
 - Soporte para múltiples juegos o biomas distintos al mundo selva
-- Detección de objetos interactivos opcionales (lianas, trampolines, guacamaya) — se dejan para iteraciones futuras una vez consolidada la política básica de supervivencia
+- Detección de objetos interactivos opcionales (lianas, trampolines, guacamaya, plataformas flotantes) — se dejan para iteraciones futuras una vez consolidada la política básica de supervivencia
 - Interfaz gráfica de usuario (GUI): la ejecución es por línea de comandos
 - Modificación del APK, archivos del emulador o código del juego
 - Generalización a múltiples resoluciones o versiones del juego
@@ -186,7 +186,7 @@ BlueStacks (960x540)
 | Banana recogida | +1.0 por banana |
 | Game over | -10.0 |
 
-**Detección de bananas recogidas:** Se mide la disminución en el conteo de bananas visibles en pantalla. Si `bananas_ahora < bananas_anterior`, Kong pasó por encima de ellas. Este enfoque es más robusto que intentar leer el contador del HUD con OCR, ya que el HUD muestra el acumulado total y no directamente las bananas del frame actual.
+**Detección de bananas recogidas:** Se lee el contador de bananas del HUD del juego. Si el valor del HUD aumenta respecto al step anterior, Kong recogió una o más bananas. Este enfoque es más confiable que medir la disminución de bananas visibles en pantalla, ya que el número de bananas visibles varía también cuando el escenario avanza y las bananas salen del ROI sin ser recogidas.
 
 **Restricción de agua:** La detección de agua activa el flag `hay_agua = True` en la observación. Esto informa al agente que una zona peligrosa está presente, incentivando indirectamente a evitar entrar a mundos alternativos a través de zonas acuáticas.
 
@@ -200,7 +200,7 @@ El `Perceptor` captura el frame **una sola vez por ciclo** y lo distribuye a tod
 
 #### Estrategia de detección por tipo de objeto
 
-Todos los detectores siguen un enfoque **híbrido HSV + Template Matching**, excepto el barril dañado que usa template matching puro:
+La mayoría de los detectores siguen un enfoque **híbrido HSV + Template Matching**. Los detectores de agua y bananas usan solo HSV por la alta distintividad de sus colores.
 
 **¿Por qué HSV + Template Matching y no solo uno de los dos?**
 
@@ -211,31 +211,33 @@ Todos los detectores siguen un enfoque **híbrido HSV + Template Matching**, exc
 | Detector | Estrategia | Razón |
 |----------|-----------|-------|
 | Kong | HSV (marrón piel) + template multi-pose | Varias poses (correr, saltar, planear, dash) |
-| Bananas | HSV (amarillo intenso) + template | Color muy distintivo, poco ruido |
-| Agua | HSV (azul) + template | Color distintivo pero con reflejos |
-| Barriles | HSV (marrón oscuro) + template | Distinguir del fondo marrón |
-| Barriles dañados | Template matching puro | El objeto está parcialmente oculto por follaje; el HSV no discrimina porque los colores del barril dañado están mezclados con el verde del árbol que lo tapa |
+| Bananas | HSV (amarillo intenso) | Color muy distintivo, ROI excluye zona de Kong |
+| Agua | HSV (azul/celeste) | Color único en la escena, sin template necesario |
+| Barriles | HSV (marrón V alto) + template | V alto distingue interior brillante del suelo oscuro |
+| Rocas | Template matching (TM_CCOEFF_NORMED) | Dos tipos: roca orgánica y roca con estructura; colores no separables con HSV del fondo |
 | Muros madera | HSV (naranja S>150) + template | S alto distingue de troncos (S~100-120) |
 | Muros piedra | HSV (gris rosado) + template | Rango estrecho de saturación |
-| Game Over | Template matching puro sobre ROI pequeño | Pantalla estática, muy confiable |
+| Game Over | Template matching puro sobre ROI central | Pantalla estática, muy confiable |
 
 #### Configuración de ROIs
 
-Todos los detectores usan ROIs expresados como **fracciones del frame** (no píxeles absolutos) para ser independientes de la resolución real de BlueStacks en el equipo del usuario:
+Los ROIs están expresados en **píxeles absolutos** calibrados para la resolución 960×540 de BlueStacks. Cambiar la resolución requiere recalibrar todos los ROIs.
 
 ```python
-ROI_FRAC = (left, top, right, bottom)  # valores en [0, 1]
-x0 = int(ROI_FRAC[0] * frame_width)
+# Ejemplos de ROIs utilizados
+ROI_KONG     = (0, 60, 420, 510)      # tercio izquierdo, excluye HUD
+ROI_BARRILES = (250, 80, 900, 480)    # excluye zona de Kong
+ROI_BANANAS  = (350, 60, 960, 510)    # excluye Kong y su boca
+ROI_AGUA     = (0, 300, 960, 510)     # franja inferior
+ROI_GAMEOVER = (200, 100, 760, 400)   # zona central de pantalla
 ```
-
-El ROI de Kong excluye `x < 0.26` (25% izquierdo) donde Kong nunca aparece, y el HUD superior (`y < 0.11`). Los muros excluyen además la zona donde Kong corre para evitar confundir su pelaje marrón con madera.
 
 #### Templates
 
 Todos los templates se entregan como **PNG con canal alpha real** (no fondo negro). El proceso de generación fue:
 
 1. Recortar el objeto del screenshot del juego con fondo removido (removebg.com)
-2. Si el PNG resultante tiene 3 canales con fondo negro (caso común con removebg), regenerar el alpha con `cv2.threshold(gris, 12, 255, THRESH_BINARY)` + morfología de cierre
+2. Si el PNG resultante tiene 3 canales con fondo negro (caso común con removebg), regenerar el alpha con `cv2.threshold(gris, 8, 255, THRESH_BINARY)`
 3. Guardar como RGBA con el alpha correcto
 
 El template matching usa `TM_CCOEFF_NORMED` con la alpha mask:
@@ -257,7 +259,7 @@ El estado del juego se convierte a un vector de **24 floats normalizados [0, 1]*
 [19-23] kong_pose one-hot (inicio, corriendo, saltando, paracaidas, dash)
 ```
 
-Los barriles, bananas y muros se ordenan por distancia horizontal a Kong, de modo que el índice 0 siempre corresponde al más cercano (el más relevante para la decisión).
+Los barriles, bananas y muros se ordenan por distancia horizontal a Kong, de modo que el índice 0 siempre corresponde al más cercano (el más relevante para la decisión). Las rocas no se incluyen explícitamente en el vector de observación — el agente aprende a evitarlas mediante la penalización de game over al colisionar con ellas.
 
 ### 8.3 Módulo de Acciones
 
@@ -308,7 +310,7 @@ Los checkpoints se guardan cada 10.000 steps en `modelos/checkpoints/`. El model
 | ID | Requerimiento |
 |----|--------------|
 | RF-01 | Capturar fotogramas del emulador a mínimo 15 FPS |
-| RF-02 | Detectar posición de Kong, barriles, bananas, muros y agua en cada frame |
+| RF-02 | Detectar posición de Kong, barriles, bananas, rocas, muros y agua en cada frame |
 | RF-03 | Detectar fin de episodio (game over) con máximo 1s de latencia |
 | RF-04 | Reiniciar el juego automáticamente al final de cada episodio |
 | RF-05 | Exponer entorno compatible con OpenAI Gymnasium (step, reset, render) |
@@ -323,7 +325,7 @@ Los checkpoints se guardan cada 10.000 steps en `modelos/checkpoints/`. El model
 |----|--------------|
 | RNF-01 | Ciclo completo captura → decisión → acción < 100 ms (90% de los casos) |
 | RNF-02 | Captura sostenida ≥ 15 FPS durante sesiones de > 30 minutos |
-| RNF-03 | ROIs expresados como fracciones del frame (independientes de resolución) |
+| RNF-03 | ROIs calibrados para resolución fija 960×540 de BlueStacks 5 |
 | RNF-04 | Sistema ejecutable con un solo comando desde terminal |
 | RNF-05 | Código organizado en módulos independientes con docstrings |
 | RNF-06 | Compatible con Windows 10/11, Python 3.9+, BlueStacks 5 |
@@ -337,7 +339,7 @@ Los checkpoints se guardan cada 10.000 steps en `modelos/checkpoints/`. El model
 | CA-01 | Captura funcional | ≥ 15 FPS durante 30 min continuas |
 | CA-02 | Latencia del pipeline | < 100 ms en el 90% de los ciclos |
 | CA-03 | Reinicio automático | Exitoso en ≥ 95% de los episodios |
-| CA-04 | Compatibilidad Gym | Pasa `gymnasium.utils.env_checker` |
+| CA-04 | Compatibilidad Gym | Entorno ejecuta episodios completos sin errores |
 | CA-05 | Entrenamiento completado | ≥ 500.000 pasos sin fallos críticos |
 | CA-06 | Superación de baseline | Puntaje promedio agente > baseline en 30 episodios (t-test p < 0.05) |
 | CA-07 | Meta de puntaje | Promedio ≥ 5.000 puntos por episodio tras entrenamiento completo |
@@ -346,19 +348,48 @@ Los checkpoints se guardan cada 10.000 steps en `modelos/checkpoints/`. El model
 
 ---
 
-## 11. Plan de Trabajo
+## 11. Cronograma del Proyecto
 
-| Semanas | Fase | Actividades |
-|---------|------|------------|
-| 1–2 | Seleccion | Seleccion del Videojuego entre los grupos de trabajo |
-| 3-4 | Configuración | Instalación emulador, configuración BlueStacks Game Controls, prueba de captura básica |
-| 4–5 | Captura y percepción | mss, benchmark FPS/latencia, detectores Kong, bananas, agua, barriles, muros, game over |
-| 5–7 | Entorno Gym | BananaKongEnv, espacio de estados/acciones/recompensa, prueba con política aleatoria |
-| 7–8 | Integración | Pipeline completo, corrección de latencia, validación de ROIs |
-| 8–13 | Entrenamiento RL | PPO, ajuste de hiperparámetros, monitoreo de curvas de aprendizaje |
-| 13–14 | Evaluación | Agente vs. baseline, métricas, análisis estadístico |
-| 14–15 | Optimización | Ajuste fino, pruebas de robustez, validación restricción de mundos |
-| 15–16 | Documentación | Reporte final, limpieza del repositorio, demo |
+> **Versión del cronograma:** v2 (entrega `crono1`) — 2026-03-11
+
+| Semanas | Fase | Actividades principales | Prototipo |
+|---------|------|------------------------|-----------|
+| 1–2 | Selección del videojuego | Evaluación de candidatos, criterios de selección, decisión documentada, boceto del pipeline | **P1** — Documento de selección y justificación de Banana Kong |
+| 3–4 | Configuración del entorno | Instalación BlueStacks 960×540, configuración Game Controls (W/D/S), instalación de dependencias Python, benchmark FPS | **P2** — Captura funcional a ≥ 15 FPS con reporte de latencia en consola |
+| 4–7 | Módulo de percepción | Preparación de templates PNG con alpha; detectores de Kong (9 poses), bananas, agua, barriles, rocas (2 tipos), muros (madera y piedra), game over; integración en clase `Perceptor`; calibración de ROIs | **P3** — `perceptor.py` en modo demo con bounding boxes en tiempo real sobre todos los objetos |
+| 5–7 | Entorno Gymnasium | Diseño del espacio de observación (24 floats) y acciones (Discrete(4)); implementación de `BananaKongEnv`; función de recompensa con contador del HUD; reinicio automático en 3 pasos; período de gracia de 60 steps | **P4** — Entorno ejecutando episodios completos sin errores + `baseline.py` con 10 episodios de política aleatoria |
+| 7–8 | Integración del pipeline | Integración captura → percepción → decisión → acción; medición de latencia end-to-end; corrección de cuellos de botella; validación de ROIs en partidas reales | **P5** — Pipeline completo corriendo 5 episodios sin intervención manual, latencia p90 < 100 ms |
+| 8–13 | Entrenamiento RL con PPO | Configuración de hiperparámetros; corrida inicial 100k pasos; monitoreo en TensorBoard; ajuste de hiperparámetros; corrida completa ≥ 500k pasos con checkpoints cada 10k | **P6** — Checkpoint a 100k pasos con curva de reward creciente<br>**P7** — Modelo final `banana_kong_ppo.zip` a ≥ 500k pasos |
+| 13–14 | Evaluación | Evaluación formal agente PPO (30 episodios); evaluación baseline aleatorio (30 episodios); t-test de medias; verificación restricción de mundos alternativos | **P8** — Informe de evaluación con tabla de puntajes, t-test y distribución (boxplot) |
+| 14–15 | Optimización y robustez | Ajuste fino según fallos identificados; re-entrenamiento parcial si hay regresión; pruebas de robustez; corrección de detectores con mayor tasa de error | **P9** — Agente refinado con puntaje promedio ≥ 5.000 puntos |
+| 15–16 | Documentación y entrega | Limpieza del repositorio; actualización del README con resultados; reporte final; grabación de demo (≥ 3 episodios); presentación | **P10** — Entrega final con repositorio documentado, demo en video y todos los CA verificados |
+
+### Diagrama de Gantt
+
+```
+Sem →   1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
+─────────────────────────────────────────────────────────
+Selección [P1]
+        ████
+Configuración [P2]
+              ████
+Percepción [P3]
+                 ████████████
+Entorno Gym [P4]
+                    ████████
+Integración [P5]
+                          ████
+Entrenamiento [P6→P7]
+                              ████████████████
+Evaluación [P8]
+                                          ████
+Optimización [P9]
+                                              ████
+Documentación [P10]
+                                                  ████
+─────────────────────────────────────────────────────────
+Entrega crono1: semana 4 (branch crono1)
+```
 
 ---
 
@@ -398,17 +429,17 @@ Colocar los templates con alpha en la carpeta `templates/`:
 
 ```
 templates/
-├── kong_corriendo.png
-├── kong_saltando.png
-├── kong_paracaidas.png
-├── kong_dash.png
+├── kong_corriendo-bg.png
+├── kong_saltando-bg.png
+├── kong_paracaidas-bg.png
+├── kong_dash-bg.png
+├── (y otros 5 templates de poses de Kong)
 ├── barril-bg.png
-├── barril_danado-bg.png
-├── banana-bg.png
-├── agua-bg.png
-├── muro_madera.png
-├── muro_piedra.png
-├── game_over.png
+├── roca1-bg.png
+├── roca2-bg.png
+├── muro_madera-bg.png
+├── muro_piedra-bg.png
+├── revive_texto.png
 ├── flecha.png
 └── play_again.png
 ```
@@ -429,14 +460,14 @@ tensorboard --logdir logs/
 ### Probar detectores individualmente
 
 ```bash
-python kong.py
-python bananas.py
-python barril.py
-python barril_danado.py
-python muros.py
-python agua.py
-python game_over.py
-python perceptor.py   # todos juntos
+python detector_kong.py
+python detector_bananas.py
+python detector_barriles.py
+python detector_rocas.py
+python detector_muros.py
+python detector_agua.py
+python detector_gameover.py
+python perceptor.py       # todos juntos
 ```
 
 ---
