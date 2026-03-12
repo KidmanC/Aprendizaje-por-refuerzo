@@ -19,8 +19,9 @@
 9. [Requerimientos](#9-requerimientos)
 10. [Criterios de Aceptación](#10-criterios-de-aceptación)
 11. [Cronograma del Proyecto](#11-cronograma-del-proyecto)
-12. [Instalación y Uso](#12-instalación-y-uso)
-13. [Referencias](#13-referencias)
+12. [Diagramas](#12-diagramas)
+13. [Instalación y Uso](#13-instalación-y-uso)
+14. [Referencias](#14-referencias)
 
 ---
 
@@ -393,7 +394,20 @@ Entrega crono1: semana 4 (branch crono1)
 
 ---
 
-## 12. Instalación y Uso
+## 12. Diagramas
+
+### Arquitectura del Sistema
+![Arquitectura](diagramas/arquitectura_sistemas.png)
+
+### Interacción entre Módulos
+![Módulos](diagramas/iteraccion_modulos.png)
+
+### Secuencia
+![Secuencia](diagramas/secuencia.png)
+
+---
+
+## 13. Instalación y Uso
 
 ### Requisitos
 
@@ -472,7 +486,7 @@ python perceptor.py       # todos juntos
 
 ---
 
-## 13. Referencias
+## 14. Referencias
 
 1. V. Mnih et al., "Human-level control through deep reinforcement learning," *Nature*, vol. 518, pp. 529–533, 2015.
 2. OpenAI, "OpenAI Five," 2019. https://openai.com/five
