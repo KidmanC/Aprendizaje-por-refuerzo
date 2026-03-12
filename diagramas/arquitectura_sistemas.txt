@@ -1,0 +1,27 @@
+' ============================================================
+' DIAGRAMA 1: ARQUITECTURA DEL SISTEMA
+' ============================================================
+
+@startuml arquitectura
+title Arquitectura del Sistema - Bot Banana Kong
+
+actor "Desarrollador" as dev
+
+node "PC con Windows" {
+    component "BlueStacks 5\n(960x540)" as bluestacks
+    component "Perceptor\n(mss + OpenCV)" as perceptor
+    component "BananaKongEnv\n(Gymnasium)" as env
+    component "Agente PPO\n(Stable-Baselines3)" as ppo
+    component "ModuloAcciones\n(pyautogui)" as acciones
+    database "Checkpoints\n/modelos/" as modelos
+}
+
+dev --> bluestacks : ejecuta juego
+bluestacks --> perceptor : frame BGR\n(captura de pantalla)
+perceptor --> env : estado (dict)
+env --> ppo : obs vector\n(24 floats)
+ppo --> acciones : acción (0-3)
+acciones --> bluestacks : tecla W/D/S
+ppo --> modelos : guarda checkpoint\ncada 10.000 steps
+
+@enduml

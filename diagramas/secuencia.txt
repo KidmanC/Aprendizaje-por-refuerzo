@@ -1,0 +1,81 @@
+' ============================================================
+' DIAGRAMA 3A: SECUENCIA - CICLO DE UN STEP
+' ============================================================
+
+@startuml secuencia_step
+title Secuencia - Ciclo de un Step de Entrenamiento
+
+participant "PPO Agent" as ppo
+participant "BananaKongEnv" as env
+participant "Perceptor" as perceptor
+participant "BlueStacks" as bs
+participant "ModuloAcciones" as acciones
+
+ppo -> env : step(acción)
+env -> acciones : ejecutar(acción)
+acciones -> bs : keyDown/keyUp\n(W, D o S)
+acciones --> env : ok
+
+env -> bs : capturar frame (mss)
+bs --> env : frame BGR
+
+env -> perceptor : detectar(frame)
+perceptor --> env : estado {kong, barriles,\nbananas, rocas,\nmuros, agua,\ngame_over}
+
+env -> env : construir obs vector\n(24 floats)
+env -> env : calcular reward\n(HUD, game_over, sobrevivir)
+
+env --> ppo : obs, reward,\nterminated, info
+
+@enduml
+
+
+' ============================================================
+' DIAGRAMA 3B: SECUENCIA - REINICIO DE EPISODIO
+' ============================================================
+
+@startuml secuencia_reset
+title Secuencia - Reinicio Automático de Episodio
+
+participant "PPO Agent" as ppo
+participant "BananaKongEnv" as env
+participant "Perceptor" as perceptor
+participant "BlueStacks" as bs
+participant "ModuloAcciones" as acciones
+
+ppo -> env : reset()
+
+alt primer episodio
+    env --> ppo : obs inicial\n(sin reiniciar juego)
+else episodio siguiente
+    env -> env : esperar 4.5s\n(pantalla Revive)
+
+    env -> bs : capturar frame
+    bs --> env : frame
+
+    env -> perceptor : buscar template\n"flecha Next Reward"
+    perceptor --> env : posición flecha
+
+    env -> acciones : click(flecha)
+    acciones -> bs : pyautogui.click()
+
+    env -> env : esperar detección\n"Play Again" (timeout 8s)
+
+    env -> perceptor : buscar template\n"play_again"
+    perceptor --> env : posición botón
+
+    env -> acciones : click(play_again)
+    acciones -> bs : pyautogui.click()
+
+    env -> env : esperar 3.0s\n(DELAY_REINICIO)
+
+    env -> bs : capturar frame inicial
+    bs --> env : frame
+
+    env -> perceptor : detectar(frame)
+    perceptor --> env : estado inicial
+
+    env --> ppo : obs inicial
+end
+
+@enduml

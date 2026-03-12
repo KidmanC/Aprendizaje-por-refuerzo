@@ -1,0 +1,57 @@
+' ============================================================
+' DIAGRAMA 2: INTERACCIÓN ENTRE MÓDULOS
+' ============================================================
+
+@startuml modulos
+title Interacción entre Módulos - Perceptor y Entorno
+
+package "Módulo de Percepción" {
+    component "Perceptor" as perceptor
+    component "DetectorKong" as dkong
+    component "DetectorBananas" as dbananas
+    component "DetectorBarriles" as dbarriles
+    component "DetectorRocas" as drocas
+    component "DetectorMuros" as dmuros
+    component "DetectorAgua" as dagua
+    component "DetectorGameOver" as dgameover
+    component "DetectorHUD" as dhud
+}
+
+package "Módulo de Entorno" {
+    component "BananaKongEnv" as env
+    component "Función de\nRecompensa" as reward
+    component "Vector de\nObservación" as obs
+}
+
+package "Módulo de Acciones" {
+    component "ModuloAcciones" as acciones
+}
+
+perceptor --> dkong : frame
+perceptor --> dbananas : frame
+perceptor --> dbarriles : frame
+perceptor --> drocas : frame
+perceptor --> dmuros : frame
+perceptor --> dagua : frame
+perceptor --> dgameover : frame (cada 10 frames)
+perceptor --> dhud : frame
+
+dkong --> perceptor : (cx, cy, pose)
+dbananas --> perceptor : [(cx, cy)]
+dbarriles --> perceptor : [(cx, cy)]
+drocas --> perceptor : [(cx, cy, tipo)]
+dmuros --> perceptor : [{cx, cy, tipo}]
+dagua --> perceptor : (hay_agua, cx_norm)
+dgameover --> perceptor : bool
+dhud --> perceptor : bananas_acumuladas
+
+perceptor --> env : estado (dict)
+env --> obs : kong, barriles,\nbananas, muros,\nagua, pose
+env --> reward : bananas_hud,\ngame_over, steps
+obs --> env : vector 24 floats
+reward --> env : reward float
+
+env --> acciones : acción (0-3)
+acciones --> env : confirmación
+
+@enduml

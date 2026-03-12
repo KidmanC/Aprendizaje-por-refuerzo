@@ -10,6 +10,7 @@ logs/
 !deteccion/
 !deteccion/templates/          # excepto los templates — esos SÍ deben subir
 !deteccion/templates/*.png
+!diagramas/*.png
 
 # Python
 __pycache__/
