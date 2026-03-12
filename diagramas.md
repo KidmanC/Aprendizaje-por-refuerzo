@@ -1,13 +1,10 @@
 ## Diagramas
 
 ### Arquitectura del Sistema
-![Arquitectura](diagramas/arquitectura.png)
+![Arquitectura](diagramas/arquitectura_sistemas.png)
 
 ### Interacción entre Módulos
-![Módulos](diagramas/modulos.png)
+![Módulos](diagramas/iteraccion_modulos.png)
 
-### Secuencia - Ciclo de un Step
-![Secuencia Step](diagramas/secuencia_step.png)
-
-### Secuencia - Reinicio de Episodio
-![Secuencia Reset](diagramas/secuencia_reset.png)
+### Secuencia
+![Secuencia](diagramas/secuencia.png)
