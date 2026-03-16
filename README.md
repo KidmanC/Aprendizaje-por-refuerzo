@@ -410,81 +410,179 @@ Entrega crono1: semana 4 (branch crono1)
 ## 13. Instalación y Uso
 
 ### Requisitos
-
-```
-Python 3.9+
-BlueStacks 5 (resolución 960x540)
-NVIDIA GPU con CUDA (recomendado)
-```
-
-### Instalación
-
+ 
+- Python 3.9+
+- BlueStacks 5
+- NVIDIA GPU con CUDA (recomendado)
+ 
+---
+ 
+### 1. Clonar el repositorio
+ 
 ```bash
-git clone <repo>
-cd <repo>
+git clone https://github.com/KidmanC/KongBot-Agente-Aut-nomo-para-Banana-Kong-mediante-Aprendizaje-por-Refuerzo
+```
+ 
+---
+ 
+### 2. Crear entorno virtual e instalar dependencias
+ 
+```bash
+python -m venv .venv
+```
+ 
+Activar el entorno virtual:
+ 
+- **Windows:**
+  ```bash
+  .venv\Scripts\activate
+  ```
+- **Mac/Linux:**
+  ```bash
+  source .venv/bin/activate
+  ```
+ 
+Instalar dependencias:
+ 
+```bash
 pip install -r requirements.txt
 ```
-
-### Configuración de BlueStacks
-
-En BlueStacks, configurar el **Game Controls** del juego con las siguientes teclas:
-
+ 
+---
+ 
+### 3. Configurar BlueStacks
+ 
+#### Resolución
+ 
+La resolución debe ser exactamente **960×540**. Para configurarla:
+ 
+1. Abre BlueStacks y anda a **Configuración → Display**
+2. Resolución: `960 × 540`
+3. DPI: `240`
+4. Guarda y reiniciá BlueStacks
+ 
+#### Desactivar anuncios
+ 
+> **Importante:** Los anuncios de BlueStacks modifican el tamaño de la ventana de juego, lo que desplaza los ROIs de todos los detectores y causa fallos en la detección.
+ 
+Para desactivarlos:
+ 
+1. Abre BlueStacks → **Configuración → Preferencias**
+2. Busca la opción **"Permitir que BlueStacks muestre anuncios"** (o similar)
+3. **Desactivala**
+4. Reiniciá BlueStacks
+ 
+#### Controles
+ 
+Dentro del juego, abre el **Game Controls** (ícono de teclado en la barra lateral de BlueStacks) y configura las siguientes teclas:
+ 
 | Tecla | Acción en el juego |
 |-------|-------------------|
-| `W` | Saltar / Planear (tap = saltar, mantener = planear) |
+| `W` | Saltar / Planear |
 | `D` | Dash (impulso hacia adelante) |
 | `S` | Bajar / Deslizarse |
-
-> **Importante:** Esta configuración reemplaza los gestos táctiles, eliminando el problema de que BlueStacks interprete el inicio de un swipe como un tap.
-
-### Templates
-
-Colocar los templates con alpha en la carpeta `templates/`:
-
+ 
+> **¿Por qué teclas y no gestos táctiles?** BlueStacks interpreta el inicio de cualquier drag como un tap, lo que hacía que Kong saltara antes de ejecutar el dash. Configurar las acciones como teclas en Game Controls elimina este problema completamente.
+ 
+---
+ 
+### 4. Estructura del proyecto
+ 
 ```
-templates/
-├── kong_corriendo-bg.png
-├── kong_saltando-bg.png
-├── kong_paracaidas-bg.png
-├── kong_dash-bg.png
-├── (y otros 5 templates de poses de Kong)
-├── barril-bg.png
-├── roca1-bg.png
-├── roca2-bg.png
-├── muro_madera-bg.png
-├── muro_piedra-bg.png
-├── revive_texto.png
-├── flecha.png
-└── play_again.png
+Aprendizaje-por-refuerzo/
+│
+├── deteccion/
+│   ├── templates/
+│   │   ├── barril-bg.png
+│   │   ├── barril_danado-bg.png
+│   │   ├── kong_corriendo1-bg.png
+│   │   ├── kong_corriendo2-bg.png
+│   │   ├── kong_corriendo3-bg.png
+│   │   ├── kong_dash-bg.png
+│   │   ├── kong_guacamaya-bg.png
+│   │   ├── kong_inicio-bg.png
+│   │   ├── kong_liana-bg.png
+│   │   ├── kong_paracaidas-bg.png
+│   │   ├── kong_saltando-bg.png
+│   │   ├── kong_saltando2-bg.png
+│   │   ├── muro_madera-bg.png
+│   │   ├── muro_piedra-bg.png
+│   │   ├── roca1-bg.png
+│   │   ├── roca2-bg.png
+│   │   ├── flecha.png
+│   │   ├── play_again.png
+│   │   └── revive_texto.png
+│   ├── __init__.py
+│   ├── detector_agua.py
+│   ├── detector_bananas.py
+│   ├── detector_barriles.py
+│   ├── detector_gameover.py
+│   ├── detector_kong.py
+│   ├── detector_muros.py
+│   └── detector_rocas.py
+│
+├── entorno/
+│   ├── __init__.py
+│   ├── entorno.py
+│   ├── perceptor.py
+│   └── reward_bananas.py
+│
+├── entrenamiento/
+│   └── entrenar.py
+│
+├── controles/
+│   ├── __init__.py
+│   └── acciones.py
+│
+├── modelos/            ← generado automáticamente, en .gitignore
+├── logs/               ← generado automáticamente, en .gitignore
+├── requirements.txt
+├── .gitignore
+└── README.md
 ```
-
-### Entrenamiento
-
+ 
+---
+ 
+### 5. Probar detectores individualmente
+ 
+Antes de entrenar, verifica que cada detector funciona correctamente con BlueStacks abierto y el juego corriendo:
+ 
 ```bash
-# Asegurarse de que BlueStacks esté abierto con Banana Kong corriendo
-python entrenar.py
-
+python -m deteccion.detector_kong
+python -m deteccion.detector_bananas
+python -m deteccion.detector_barriles
+python -m deteccion.detector_rocas
+python -m deteccion.detector_muros
+python -m deteccion.detector_agua
+python -m deteccion.detector_gameover
+python -m entorno.perceptor        # todos los detectores juntos (por ahora solo bananas y kong por optimizacion)
+```
+ 
+Cada detector abre una ventana con las detecciones en tiempo real. Presioná `q` para cerrar.
+ 
+---
+ 
+### 6. Entrenar el agente
+ 
+```bash
+# Entrenamiento desde cero
+python -m entrenamiento.entrenar
+ 
 # Continuar entrenamiento previo
-python entrenar.py --continuar
-
-# Ver métricas en TensorBoard
+python -m entrenamiento.entrenar --continuar
+```
+ 
+Los checkpoints se guardan automáticamente en `modelos/checkpoints/` cada 10.000 steps.
+ 
+---
+ 
+### 7. Monitorear el entrenamiento
+ 
+```bash
 tensorboard --logdir logs/
 ```
-
-### Probar detectores individualmente
-
-```bash
-python detector_kong.py
-python detector_bananas.py
-python detector_barriles.py
-python detector_rocas.py
-python detector_muros.py
-python detector_agua.py
-python detector_gameover.py
-python perceptor.py       # todos juntos
-```
-
----
+ 
+Abrí `http://localhost:6006` en el navegador para ver las curvas de recompensa en tiempo real.
 
 ## 14. Referencias
 
