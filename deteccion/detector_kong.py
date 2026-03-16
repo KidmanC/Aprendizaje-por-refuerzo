@@ -1,13 +1,11 @@
 """
-detector_kong.py — Detección de Kong: HSV + Template Matching
+detector_kong.py — Detección de Kong: HSV + Template Matching + CSRT Tracker
 Resolución BlueStacks: 960x540
 
 Estrategia:
-  1. HSV encuentra blobs marrones del tamaño correcto dentro de la ROI
-  2. Template matching corre SOLO sobre cada blob candidato
-  3. El blob con mejor confianza es Kong
-
-Ventaja: el template matching nunca compite contra el fondo verde/amarillo.
+  1. HSV + Template Matching inicializa el tracker CSRT
+  2. CSRT sigue a Kong frame a frame sin depender del color
+  3. Si el tracker falla, se reinicializa con HSV + Template Matching
 """
 
 import cv2
@@ -17,32 +15,23 @@ from mss import mss
 import time
 import os
 
-
 # ── Configuración ────────────────────────────────────────────────────
-
-# ROI donde aparece Kong (izquierda de la pantalla, sin HUD)
 ROI = (0, 60, 420, 510)
 
-# Rango HSV para el marrón de Kong
-KONG_HSV_BAJO = np.array([5, 60, 50])
-KONG_HSV_ALTO = np.array([25, 255, 220])
+KONG_HSV_BAJO = np.array([5, 80, 50])
+KONG_HSV_ALTO = np.array([25, 170, 180])
 
-# Rango de área válida para blobs de Kong (en px² dentro de la ROI)
 BLOB_AREA_MIN = 400
-BLOB_AREA_MAX = 3500  # reducido para excluir objetos grandes del fondo
-
-# Ratio ancho/alto válido para Kong (ni muy delgado ni muy ancho)
+BLOB_AREA_MAX = 3500
 BLOB_RATIO_MIN = 0.4
 BLOB_RATIO_MAX = 2.5
 
-# Umbral de confianza para template matching (sobre el blob recortado)
-UMBRAL = 0.35
-
-# Escalas a probar en template matching
+UMBRAL = 0.65
 ESCALAS = [0.9, 1.0, 1.1]
-
-# Margen extra alrededor del blob para el recorte (px)
 MARGEN_BLOB = 10
+
+# Cuántos frames esperar antes de reintentar inicializar el tracker
+FRAMES_REINTENTAR = 10
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
@@ -65,9 +54,7 @@ class DetectorKong:
         self.ventana = None
         self.sct = mss()
         self.actualizar_ventana()
-        self.posicion_anterior = None
 
-        # Cargar templates con alpha
         self.templates = []
         for filename, pose in TEMPLATES_INFO:
             ruta = os.path.join(TEMPLATES_DIR, filename)
@@ -75,19 +62,23 @@ class DetectorKong:
             if img is None:
                 print(f"⚠️  No se encontró: {ruta}")
                 continue
-
             if img.shape[2] == 4:
                 alpha = img[:, :, 3]
                 img_gris = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
             else:
                 img_gris = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 alpha = None
-
             self.templates.append((img_gris, alpha, pose))
-
         print(f"✅ {len(self.templates)} templates cargados")
 
-    # ─────────────────────────────────────────
+        # Estado del tracker
+        self.tracker = None
+        self._tracker_activo = False
+        self._frames_sin_deteccion = 0
+        self._pose_anterior = "corriendo"
+        self._rect_anterior = None
+        self.posicion_anterior = None
+
     def actualizar_ventana(self):
         ventanas = gw.getWindowsWithTitle(self.titulo)
         if ventanas:
@@ -108,21 +99,12 @@ class DetectorKong:
         frame = np.array(screenshot)
         return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-    # ─────────────────────────────────────────
     def _encontrar_blobs_hsv(self, roi):
-        """
-        Usa HSV para encontrar blobs marrones del tamaño correcto.
-        Retorna lista de (x, y, w, h) en coordenadas de la ROI.
-        """
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mascara = cv2.inRange(hsv, KONG_HSV_BAJO, KONG_HSV_ALTO)
         mascara = cv2.erode(mascara, None, iterations=1)
         mascara = cv2.dilate(mascara, None, iterations=2)
-
-        contornos, _ = cv2.findContours(
-            mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-
+        contornos, _ = cv2.findContours(mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         blobs = []
         for cnt in contornos:
             area = cv2.contourArea(cnt)
@@ -133,26 +115,17 @@ class DetectorKong:
             if not (BLOB_RATIO_MIN < ratio < BLOB_RATIO_MAX):
                 continue
             blobs.append((x, y, w, h))
+        return blobs
 
-        return blobs, mascara
-
-    # ─────────────────────────────────────────
     def _match_sobre_blob(self, roi_gris, x, y, w, h):
-        """
-        Corre template matching sobre el recorte del blob.
-        Retorna (mejor_val, mejor_pose).
-        """
-        # Recortar blob con margen
         h_roi, w_roi = roi_gris.shape
         bx0 = max(0, x - MARGEN_BLOB)
         by0 = max(0, y - MARGEN_BLOB)
         bx1 = min(w_roi, x + w + MARGEN_BLOB)
         by1 = min(h_roi, y + h + MARGEN_BLOB)
         recorte = roi_gris[by0:by1, bx0:bx1]
-
         mejor_val = 0
         mejor_pose = None
-
         for template, alpha, pose in self.templates:
             h_t, w_t = template.shape
             for escala in ESCALAS:
@@ -160,67 +133,31 @@ class DetectorKong:
                 nh = int(h_t * escala)
                 if nw >= recorte.shape[1] or nh >= recorte.shape[0]:
                     continue
-
                 t_scaled = cv2.resize(template, (nw, nh))
-
                 if alpha is not None:
                     a_scaled = cv2.resize(alpha, (nw, nh))
-                    res = cv2.matchTemplate(
-                        recorte, t_scaled, cv2.TM_SQDIFF_NORMED, mask=a_scaled
-                    )
+                    res = cv2.matchTemplate(recorte, t_scaled, cv2.TM_SQDIFF_NORMED, mask=a_scaled)
                 else:
                     res = cv2.matchTemplate(recorte, t_scaled, cv2.TM_SQDIFF_NORMED)
-
                 min_val, _, _, _ = cv2.minMaxLoc(res)
                 val = 1.0 - min_val
-
                 if val > mejor_val:
                     mejor_val = val
                     mejor_pose = pose
-
         return mejor_val, mejor_pose
 
-    # ─────────────────────────────────────────
-    def detectar_kong(self, frame):
-        """
-        Detecta a Kong combinando HSV (candidatos) + Template Matching (verificación).
-
-        Retorna:
-            posicion      : (cx, cy) normalizados a [0,1] o None
-            frame_resultado : frame con anotaciones
-            pose          : string con la pose detectada o None
-        """
-        if frame is None:
-            return None, frame, None
-
+    def _detectar_con_hsv_template(self, frame):
+        """Intenta detectar a Kong con HSV + Template. Retorna (rect_px, pose, conf) o None."""
         x0, y0, x1, y1 = ROI
         roi = frame[y0:y1, x0:x1]
         roi_gris = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        h_roi, w_roi = roi.shape[:2]
-
-        frame_resultado = frame.copy()
-        cv2.rectangle(frame_resultado, (x0, y0), (x1, y1), (255, 255, 0), 1)
-
-        # ── Paso 1: HSV encuentra blobs candidatos ───────────────────
-        blobs, mascara = self._encontrar_blobs_hsv(roi)
-
+        blobs = self._encontrar_blobs_hsv(roi)
         if not blobs:
-            cv2.putText(frame_resultado, "Kong: sin blobs HSV",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            return None, frame_resultado, None
+            return None
 
-        # Dibujar blobs candidatos en gris
-        for (bx, by, bw, bh) in blobs:
-            cv2.rectangle(frame_resultado,
-                          (x0 + bx, y0 + by),
-                          (x0 + bx + bw, y0 + by + bh),
-                          (180, 180, 180), 1)
-
-        # ── Paso 2: Template matching sobre cada blob ────────────────
         mejor_val_global = 0
         mejor_blob = None
         mejor_pose = None
-
         for blob in blobs:
             bx, by, bw, bh = blob
             val, pose = self._match_sobre_blob(roi_gris, bx, by, bw, bh)
@@ -229,45 +166,91 @@ class DetectorKong:
                 mejor_blob = blob
                 mejor_pose = pose
 
-        # ── Sin match suficientemente bueno ─────────────────────────
         if mejor_val_global < UMBRAL or mejor_blob is None:
-            cv2.putText(frame_resultado,
-                        f"Kong: NO detectado (max={mejor_val_global:.2f})",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            return None, frame_resultado, None
+            return None
 
-        # ── Calcular posición final ───────────────────────────────────
         bx, by, bw, bh = mejor_blob
         x_real = x0 + bx
         y_real = y0 + by
+        return (x_real, y_real, bw, bh), mejor_pose, mejor_val_global
 
-        cx = (x_real + bw / 2) / frame.shape[1]
-        cy = (y_real + bh / 2) / frame.shape[0]
-        self.posicion_anterior = (cx, cy)
+    def reset(self):
+        """Llamar al reiniciar el juego — el CSRT empieza desde cero."""
+        self.tracker               = None
+        self._tracker_activo       = False
+        self._frames_sin_deteccion = 0
+        self._rect_anterior        = None
+        self.posicion_anterior     = None
 
-        # Dibujar detección final
-        cv2.rectangle(frame_resultado,
-                      (x_real, y_real), (x_real + bw, y_real + bh),
-                      (0, 165, 255), 2)
-        cv2.circle(frame_resultado,
-                   (int(x_real + bw / 2), int(y_real + bh / 2)),
-                   5, (0, 165, 255), -1)
-        cv2.putText(frame_resultado,
-                    f"Kong [{mejor_pose}] cx={cx:.2f} cy={cy:.2f} conf={mejor_val_global:.2f}",
-                    (x_real, y_real - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 165, 255), 1)
+    def _inicializar_tracker(self, frame, rect):
+        """Inicializa el CSRT tracker con el rect dado."""
+        self.tracker = cv2.TrackerCSRT_create()
+        x, y, w, h = rect
+        self.tracker.init(frame, (x, y, w, h))
+        self._tracker_activo = True
 
-        return (cx, cy), frame_resultado, mejor_pose
+    def detectar_kong(self, frame):
+        if frame is None:
+            return None, frame, None, None, 0.0
 
-    # ─────────────────────────────────────────
+        frame_resultado = frame.copy()
+        x0, y0, x1, y1 = ROI
+        cv2.rectangle(frame_resultado, (x0, y0), (x1, y1), (255, 255, 0), 1)
+
+        # ── Intentar con tracker CSRT ─────────────────────────────────
+        if self._tracker_activo and self.tracker is not None:
+            ok, bbox = self.tracker.update(frame)
+            if ok:
+                x, y, w, h = [int(v) for v in bbox]
+                rect_px = (x, y, w, h)
+                cx = (x + w / 2) / frame.shape[1]
+                cy = (y + h / 2) / frame.shape[0]
+                self.posicion_anterior = (cx, cy)
+                self._rect_anterior = rect_px
+                self._frames_sin_deteccion = 0
+
+                cv2.rectangle(frame_resultado, (x, y), (x+w, y+h), (0, 165, 255), 2)
+                cv2.circle(frame_resultado, (x + w//2, y + h//2), 5, (0, 165, 255), -1)
+                cv2.putText(frame_resultado, "CSRT", (x, y - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 165, 255), 1)
+                return (cx, cy), frame_resultado, self._pose_anterior, rect_px, 1.0
+            else:
+                # Tracker perdió a Kong — reinicializar con HSV+template
+                self._tracker_activo = False
+                self._frames_sin_deteccion = 0
+
+        # ── Reinicializar con HSV + Template ─────────────────────────
+        self._frames_sin_deteccion += 1
+        if self._frames_sin_deteccion <= FRAMES_REINTENTAR or not self._tracker_activo:
+            resultado = self._detectar_con_hsv_template(frame)
+            if resultado is not None:
+                rect_px, pose, conf = resultado
+                x, y, w, h = rect_px
+                self._inicializar_tracker(frame, rect_px)
+                self._pose_anterior = pose
+                self._rect_anterior = rect_px
+                cx = (x + w / 2) / frame.shape[1]
+                cy = (y + h / 2) / frame.shape[0]
+                self.posicion_anterior = (cx, cy)
+                self._frames_sin_deteccion = 0
+
+                cv2.rectangle(frame_resultado, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.circle(frame_resultado, (x + w//2, y + h//2), 5, (0, 255, 0), -1)
+                cv2.putText(frame_resultado, f"INIT conf={conf:.2f}", (x, y - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+                return (cx, cy), frame_resultado, pose, rect_px, conf
+
+        # ── Fallback: última posición conocida ────────────────────────
+        if self.posicion_anterior is not None:
+            return self.posicion_anterior, frame_resultado, self._pose_anterior, self._rect_anterior, 0.0
+
+        return None, frame_resultado, None, None, 0.0
+
     def probar(self):
-        print("=== DETECTOR DE KONG (HSV + Template Matching) ===")
-        print("Presiona 'q' para salir")
-        print("Presiona 's' para guardar frame")
-        print("Presiona 'm' para mostrar/ocultar máscara HSV")
+        print("=== DETECTOR DE KONG (CSRT + HSV + Template) ===")
+        print("Presiona 'q' para salir | 's' para guardar | 'r' para reiniciar tracker")
         time.sleep(2)
 
-        mostrar_mascara = False
         cv2.namedWindow("Kong Detector")
         fps_tiempo = time.time()
         fps_contador = 0
@@ -279,12 +262,21 @@ class DetectorKong:
                 time.sleep(1)
                 continue
 
-            posicion, frame_resultado, pose = self.detectar_kong(frame)
+            posicion, frame_resultado, pose, rect_px, conf = self.detectar_kong(frame)
 
             fps_contador += 1
             if time.time() - fps_tiempo >= 1.0:
                 fps = fps_contador / (time.time() - fps_tiempo)
-                print(f"FPS: {fps:.1f} | Kong: {posicion} | Pose: {pose}")
+                if posicion and rect_px:
+                    kx, ky, kw, kh = rect_px
+                    area = kw * kh
+                    region_hsv = cv2.cvtColor(frame[ky:ky+kh, kx:kx+kw], cv2.COLOR_BGR2HSV)
+                    h_med = float(np.mean(region_hsv[:,:,0]))
+                    s_med = float(np.mean(region_hsv[:,:,1]))
+                    v_med = float(np.mean(region_hsv[:,:,2]))
+                    print(f"FPS: {fps:.1f} | Kong: {posicion} | Pose: {pose} | conf={conf:.2f} | area={area} H={h_med:.0f} S={s_med:.0f} V={v_med:.0f}")
+                else:
+                    print(f"FPS: {fps:.1f} | Kong: None")
                 fps_contador = 0
                 fps_tiempo = time.time()
 
@@ -297,10 +289,10 @@ class DetectorKong:
             elif key == ord("s"):
                 cv2.imwrite("kong_frame.png", frame_resultado)
                 print("Frame guardado")
-            elif key == ord("m"):
-                mostrar_mascara = not mostrar_mascara
-                if not mostrar_mascara:
-                    cv2.destroyWindow("Mascara HSV")
+            elif key == ord("r"):
+                self.tracker = None
+                self._tracker_activo = False
+                print("Tracker reiniciado")
 
         cv2.destroyAllWindows()
 

@@ -16,6 +16,7 @@ Acciones:
 
 import pyautogui
 import pygetwindow as gw
+import win32gui
 import time
 import signal
 import sys
@@ -67,10 +68,10 @@ class ModuloAcciones:
         return False
 
     def _foco_bluestacks(self):
-        if self.ventana is None:
-            self._actualizar_ventana()
         try:
-            self.ventana.activate()
+            hwnd = win32gui.FindWindow(None, "BlueStacks App Player")
+            if hwnd:
+                win32gui.SetForegroundWindow(hwnd)
         except Exception:
             pass
 

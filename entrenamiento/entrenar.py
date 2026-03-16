@@ -21,7 +21,7 @@ from entorno.entorno import BananaKongEnv
 RUTA_MODELO      = "modelos/banana_kong_ppo"
 RUTA_LOGS        = "logs/"
 RUTA_CHECKPOINTS = "modelos/checkpoints/"
-TOTAL_TIMESTEPS  = 1_000
+TOTAL_TIMESTEPS  = 5_000
 GUARDAR_CADA     = 10_000
 
 PPO_CONFIG = {
