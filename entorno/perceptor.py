@@ -15,6 +15,10 @@ import threading
 from deteccion.detector_kong     import DetectorKong
 from deteccion.detector_bananas  import DetectorBananas
 from deteccion.detector_gameover import DetectorGameOver
+from deteccion.detector_agua     import DetectorAgua
+from deteccion.detector_barriles import DetectorBarriles
+from deteccion.detector_rocas    import DetectorRocas
+from deteccion.detector_muros    import DetectorMuros
 
 GAMEOVER_CADA = 10
 
@@ -29,20 +33,46 @@ class Perceptor:
         self.det_kong     = DetectorKong()
         self.det_bananas  = DetectorBananas()
         self.det_gameover = DetectorGameOver()
-        print("✅ Detectores listos (modo simplificado: kong + bananas)")
+        self.det_agua     = DetectorAgua()
+        self.det_barriles = DetectorBarriles()
+        self.det_rocas    = DetectorRocas()
+        self.det_muros    = DetectorMuros()
+        print("✅ Detectores listos")
 
-        # Estado compartido entre hilo y agente
+        # Cadencia de cada detector
+        self.AGUA_CADA     = 3
+        self.BARRILES_CADA = 2
+        self.ROCAS_CADA    = 3
+        self.MUROS_CADA    = 3
+
+        # Últimos resultados
+        self._ultimo_gameover    = False
+        self._ultimo_agua        = False
+        self._agua_cx            = None
+        self._ultimo_agua_rects  = []
+        self._ultimo_barriles       = []
+        self._ultimo_barriles_rects = []
+        self._ultimo_rocas          = []
+        self._ultimo_rocas_rects    = []
+        self._ultimo_muros_rects    = []
+
+        # Estado compartido
         self._estado      = self._estado_vacio()
         self._lock        = threading.Lock()
         self._frame_count = 0
-        self._ultimo_gameover = False
 
-        # Arrancar hilo de detección
-        self._activo = True
-        self._hilo   = threading.Thread(target=self._loop, daemon=True)
-        self._hilo.start()
+        # Colisiones bananas
+        self._bananas_recogidas = 0
+        self._pico_colisiones   = 0
+        self.MARGEN_KONG        = 10
 
-        # Esperar primer estado válido antes de retornar
+        # Arrancar hilos
+        self._activo   = True
+        self._hilo_rapido = threading.Thread(target=self._loop_rapido, daemon=True)
+        self._hilo_lento  = threading.Thread(target=self._loop_lento,  daemon=True)
+        self._hilo_rapido.start()
+        self._hilo_lento.start()
+
         print("Esperando primer frame...", end=" ")
         for _ in range(50):
             time.sleep(0.1)
@@ -51,15 +81,9 @@ class Perceptor:
                     break
         print("listo")
 
-        # Colisiones — detectadas en el hilo, leídas por el entorno
-        self._bananas_recogidas   = 0   # acumulador entre calls
-        self._pico_colisiones     = 0
-        self.MARGEN_KONG          = 10
-
-        # Hilo de display — muestra el estado en tiempo real
-        self._display_activo  = False
-        self._total_bananas   = 0
-        self._step_count      = 0
+        self._display_activo = False
+        self._total_bananas  = 0
+        self._step_count     = 0
 
     # ── Ventana ──────────────────────────────────────────────────────
     def actualizar_ventana(self):
@@ -77,10 +101,11 @@ class Perceptor:
             "height": self.ventana.height,
         }
 
-    # ── Hilo de detección ─────────────────────────────────────────────
-    def _loop(self):
-        """Corre continuamente en background. mss propio por thread-safety."""
+    # ── Hilo rápido: Kong + Bananas + colisiones ─────────────────────
+    def _loop_rapido(self):
         sct = mss()
+        fps_t = time.time()
+        fps_c = 0
         while self._activo:
             try:
                 if self.ventana is None:
@@ -89,9 +114,12 @@ class Perceptor:
                     continue
 
                 screenshot = sct.grab(self._get_monitor())
-                frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2BGR)
+                arr = np.array(screenshot)
+                if arr is None or arr.size == 0 or arr.shape[0] == 0:
+                    time.sleep(0.05)
+                    continue
+                frame = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
-                # Detectar
                 kong_pos, _, kong_pose, kong_rect, _ = self.det_kong.detectar_kong(frame)
                 cantidad, _, contornos, rects = self.det_bananas.detectar_bananas(frame)
 
@@ -101,36 +129,120 @@ class Perceptor:
                     x, y, bw, bh = cv2.boundingRect(cnt)
                     bananas_pos.append(((x + bw/2) / w_f, (y + bh/2) / h_f))
 
+                self._detectar_colisiones(kong_rect, rects)
+
+                with self._lock:
+                    self._estado["kong"]      = kong_pos
+                    self._estado["kong_rect"] = kong_rect
+                    self._estado["kong_pose"] = kong_pose
+                    self._estado["bananas"]   = {"cantidad": cantidad, "posiciones": bananas_pos, "rects": rects}
+                    self._estado["frame"]     = frame
+
+                fps_c += 1
+                if time.time() - fps_t >= 5.0:
+                    fps = fps_c / (time.time() - fps_t)
+                    print(f"[hilo-rapido] FPS real: {fps:.1f}")
+                    fps_c = 0
+                    fps_t = time.time()
+
+            except Exception as e:
+                print(f"[perceptor-rapido] error: {e}")
+                time.sleep(0.1)
+            try:
+                if self.ventana is None:
+                    self.actualizar_ventana()
+                    time.sleep(0.5)
+                    continue
+
+                screenshot = sct.grab(self._get_monitor())
+                arr = np.array(screenshot)
+                if arr is None or arr.size == 0 or arr.shape[0] == 0:
+                    time.sleep(0.05)
+                    continue
+                frame = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+
+                kong_pos, _, kong_pose, kong_rect, _ = self.det_kong.detectar_kong(frame)
+                cantidad, _, contornos, rects = self.det_bananas.detectar_bananas(frame)
+
+                h_f, w_f = frame.shape[:2]
+                bananas_pos = []
+                for cnt in contornos:
+                    x, y, bw, bh = cv2.boundingRect(cnt)
+                    bananas_pos.append(((x + bw/2) / w_f, (y + bh/2) / h_f))
+
+                self._detectar_colisiones(kong_rect, rects)
+
+                with self._lock:
+                    self._estado["kong"]      = kong_pos
+                    self._estado["kong_rect"] = kong_rect
+                    self._estado["kong_pose"] = kong_pose
+                    self._estado["bananas"]   = {"cantidad": cantidad, "posiciones": bananas_pos, "rects": rects}
+                    self._estado["frame"]     = frame
+
+            except Exception as e:
+                print(f"[perceptor-rapido] error: {e}")
+                time.sleep(0.1)
+
+    # ── Hilo lento: GameOver + Agua + Barriles + Rocas + Muros ───────
+    def _loop_lento(self):
+        sct = mss()
+        self._frame_count = 0
+        while self._activo:
+            try:
+                if self.ventana is None:
+                    time.sleep(0.5)
+                    continue
+
+                screenshot = sct.grab(self._get_monitor())
+                arr = np.array(screenshot)
+                if arr is None or arr.size == 0 or arr.shape[0] == 0:
+                    time.sleep(0.1)
+                    continue
+                frame = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+
                 self._frame_count += 1
+
                 if self._frame_count % GAMEOVER_CADA == 0:
                     game_over, _, _ = self.det_gameover.detectar_gameover(frame)
                     self._ultimo_gameover = game_over
 
-                estado = {
-                    "kong":      kong_pos,
-                    "kong_rect": kong_rect,
-                    "kong_pose": kong_pose,
-                    "bananas":   {"cantidad": cantidad, "posiciones": bananas_pos, "rects": rects},
-                    "barriles":  [],
-                    "muros":     [],
-                    "agua":      False,
-                    "game_over": self._ultimo_gameover,
-                    "frame":     frame,
-                }
+                if self._frame_count % self.AGUA_CADA == 0:
+                    hay_agua, agua_cx, _, _, agua_rects = self.det_agua.detectar_agua(frame)
+                    self._ultimo_agua       = hay_agua
+                    self._agua_cx           = agua_cx
+                    self._ultimo_agua_rects = agua_rects
 
-                # Detectar colisiones en el hilo — corre a máxima velocidad
-                self._detectar_colisiones(kong_rect, rects)
+                if self._frame_count % self.BARRILES_CADA == 0:
+                    barriles, _, _ = self.det_barriles.detectar_barriles(frame)
+                    self._ultimo_barriles       = [(cx, cy) for cx, cy, _ in barriles]
+                    self._ultimo_barriles_rects = [r for _, _, r in barriles]
+
+                if self._frame_count % self.ROCAS_CADA == 0:
+                    rocas, _ = self.det_rocas.detectar_rocas(frame)
+                    self._ultimo_rocas       = [(cx, cy) for cx, cy, _, _ in rocas]
+                    self._ultimo_rocas_rects = [rect for _, _, _, rect in rocas]
+
+                if self._frame_count % self.MUROS_CADA == 0:
+                    muros, _, _ = self.det_muros.detectar_muros(frame)
+                    self._ultimo_muros_rects = [m["rect"] for m in muros]
 
                 with self._lock:
-                    self._estado = estado
+                    self._estado["barriles"]      = self._ultimo_barriles
+                    self._estado["barriles_rects"] = self._ultimo_barriles_rects
+                    self._estado["rocas"]          = self._ultimo_rocas
+                    self._estado["rocas_rects"]    = self._ultimo_rocas_rects
+                    self._estado["muros_rects"]    = self._ultimo_muros_rects
+                    self._estado["agua"]        = self._ultimo_agua
+                    self._estado["agua_cx"]     = self._agua_cx
+                    self._estado["agua_rects"]  = self._ultimo_agua_rects
+                    self._estado["game_over"]   = self._ultimo_gameover
 
             except Exception as e:
-                print(f"[perceptor] error en hilo: {e}")
+                print(f"[perceptor-lento] error: {e}")
                 time.sleep(0.1)
 
-    # ── Colisiones ───────────────────────────────────────────────────
+    # ── Colisiones bananas ────────────────────────────────────────────
     def _detectar_colisiones(self, kong_rect, rects_bananas):
-        """Corre en el hilo — detecta patrón pico→cero continuamente."""
         if kong_rect is None:
             return
         kx, ky, kw, kh = kong_rect
@@ -149,20 +261,17 @@ class Perceptor:
             self._pico_colisiones    = 0
 
     def pop_bananas_recogidas(self):
-        """El entorno llama esto en cada step para leer y resetear el contador."""
         with self._lock:
             n = self._bananas_recogidas
             self._bananas_recogidas = 0
             return n
 
     def reset_colisiones(self):
-        """Llamar al inicio de cada episodio."""
         self._bananas_recogidas = 0
         self._pico_colisiones   = 0
 
     # ── API pública ───────────────────────────────────────────────────
     def get_estado(self):
-        """Retorna el último estado calculado — instantáneo."""
         with self._lock:
             return dict(self._estado)
 
@@ -170,17 +279,13 @@ class Perceptor:
         with self._lock:
             return self._estado["bananas"]["cantidad"]
 
+    # ── Display ───────────────────────────────────────────────────────
     def start_display(self):
-        """Arranca ventana de visualización en su propio hilo."""
         self._display_activo = True
         self._hilo_display = threading.Thread(target=self._loop_display, daemon=True)
         self._hilo_display.start()
 
     def _loop_display(self):
-        """
-        Muestra el estado en tiempo real a la mitad de resolución.
-        Escalar antes de dibujar = 4x menos píxeles procesados.
-        """
         cv2.namedWindow("Debug")
         cv2.moveWindow("Debug", 1000, 100)
         ESCALA = 0.5
@@ -192,18 +297,49 @@ class Perceptor:
                 time.sleep(0.05)
                 continue
 
-            # Escalar primero — dibujar sobre imagen pequeña
             small = cv2.resize(frame, (0, 0), fx=ESCALA, fy=ESCALA)
 
-            # Bounding box Kong
+            # Kong — naranja
             if estado["kong_rect"]:
                 kx, ky, kw, kh = [int(v * ESCALA) for v in estado["kong_rect"]]
                 cv2.rectangle(small, (kx, ky), (kx+kw, ky+kh), (0, 165, 255), 1)
 
-            # Bounding boxes bananas
+            # Bananas — verde
             for bx, by, bw, bh in estado["bananas"]["rects"]:
                 bx, by, bw, bh = [int(v * ESCALA) for v in (bx, by, bw, bh)]
                 cv2.rectangle(small, (bx, by), (bx+bw, by+bh), (0, 255, 0), 1)
+
+            # Barriles — verde
+            for rx, ry, rw, rh in estado.get("barriles_rects", []):
+                rx2 = int(rx * ESCALA)
+                ry2 = int(ry * ESCALA)
+                rw2 = int(rw * ESCALA)
+                rh2 = int(rh * ESCALA)
+                cv2.rectangle(small, (rx2, ry2), (rx2+rw2, ry2+rh2), (0, 255, 0), 1)
+
+            # Rocas — verde
+            for rx, ry, rw, rh in estado.get("rocas_rects", []):
+                rx2 = int(rx * ESCALA)
+                ry2 = int(ry * ESCALA)
+                rw2 = int(rw * ESCALA)
+                rh2 = int(rh * ESCALA)
+                cv2.rectangle(small, (rx2, ry2), (rx2+rw2, ry2+rh2), (0, 255, 0), 1)
+
+            # Muros — bounding boxes
+            for mx, my, mw, mh in estado.get("muros_rects", []):
+                mx2 = int(mx * ESCALA)
+                my2 = int(my * ESCALA)
+                mw2 = int(mw * ESCALA)
+                mh2 = int(mh * ESCALA)
+                cv2.rectangle(small, (mx2, my2), (mx2+mw2, my2+mh2), (0, 255, 0), 1)
+
+            # Agua — verde
+            for ax, ay, aw, ah in estado.get("agua_rects", []):
+                ax2 = int(ax * ESCALA)
+                ay2 = int(ay * ESCALA)
+                aw2 = int(aw * ESCALA)
+                ah2 = int(ah * ESCALA)
+                cv2.rectangle(small, (ax2, ay2), (ax2+aw2, ay2+ah2), (0, 255, 0), 1)
 
             # Panel info
             cv2.rectangle(small, (3, 3), (200, 50), (0, 0, 0), -1)
@@ -220,63 +356,47 @@ class Perceptor:
         cv2.destroyWindow("Debug")
 
     def parar(self):
-        self._activo = False
+        self._activo         = False
         self._display_activo = False
 
     # ── Estado vacío ──────────────────────────────────────────────────
     def _estado_vacio(self):
         return {
-            "kong":      None,
-            "kong_rect": None,
-            "kong_pose": None,
-            "bananas":   {"cantidad": 0, "posiciones": [], "rects": []},
-            "barriles":  [],
-            "muros":     [],
-            "agua":      False,
-            "game_over": False,
-            "frame":     None,
+            "kong":        None,
+            "kong_rect":   None,
+            "kong_pose":   None,
+            "bananas":     {"cantidad": 0, "posiciones": [], "rects": []},
+            "barriles":      [],
+            "barriles_rects": [],
+            "rocas":         [],
+            "rocas_rects":   [],
+            "muros_rects":   [],
+            "agua":        False,
+            "agua_cx":     None,
+            "agua_rects":  [],
+            "game_over":   False,
+            "frame":       None,
         }
 
     # ── Debug ─────────────────────────────────────────────────────────
     def probar(self):
         print("=== PERCEPTOR ===  q=salir")
         time.sleep(2)
-        cv2.namedWindow("Perceptor")
+        self.start_display()
+
         fps_t = time.time()
         fps_c = 0
 
         while True:
             estado = self.get_estado()
-            frame  = estado["frame"]
-            if frame is None:
-                time.sleep(0.05)
-                continue
-
-            debug = frame.copy()
-            if estado["kong_rect"]:
-                kx, ky, kw, kh = estado["kong_rect"]
-                cv2.rectangle(debug, (kx, ky), (kx+kw, ky+kh), (0,165,255), 2)
-            for bx, by, bw, bh in estado["bananas"]["rects"]:
-                cv2.rectangle(debug, (bx, by), (bx+bw, by+bh), (0,255,0), 2)
-            cv2.rectangle(debug, (5,5), (280,45), (0,0,0), -1)
-            cv2.putText(debug, f"Bananas: {estado['bananas']['cantidad']}",
-                        (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
-
             fps_c += 1
             if time.time() - fps_t >= 1.0:
                 fps = fps_c / (time.time() - fps_t)
-                print(f"FPS display: {fps:.1f} | Kong: {estado['kong']} | "
+                print(f"FPS: {fps:.1f} | Kong: {estado['kong']} | "
                       f"Bananas: {estado['bananas']['cantidad']} | GO: {estado['game_over']}")
                 fps_c = 0
                 fps_t = time.time()
-
-            cv2.imshow("Perceptor", debug)
-            cv2.moveWindow("Perceptor", 100, 100)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
-        cv2.destroyAllWindows()
-        self.parar()
+            time.sleep(0.05)
 
 
 if __name__ == "__main__":

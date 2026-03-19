@@ -12,8 +12,8 @@ from mss import mss
 import time
 import os
 
-UMBRAL = 0.72
-ROI = (250, 60, 960, 510)
+UMBRAL = 0.80
+ROI = (160, 0, 960, 510)
 ESCALAS = [0.9, 1.0, 1.1]
 MIN_DISTANCIA = 50
 FACTOR_RESIZE = 0.5  # trabajar a mitad de resolución
@@ -106,6 +106,8 @@ class DetectorRocas:
                 ubicaciones = np.where(res >= UMBRAL)
                 for pt in zip(*ubicaciones[::-1]):
                     val = res[pt[1], pt[0]]
+                    if not np.isfinite(val):
+                        continue
                     detecciones.append((val, pt[0], pt[1], nw, nh, tipo))
 
         # Non-maximum suppression
@@ -125,7 +127,8 @@ class DetectorRocas:
             bh_real = int(bh * factor_inv)
             cx = (x_real + bw_real/2) / frame.shape[1]
             cy = (y_real + bh_real/2) / frame.shape[0]
-            rocas.append((cx, cy, tipo))
+            rocas.append((cx, cy, tipo, (x_real, y_real, bw_real, bh_real)))
+            #print(f"  Roca conf={val:.2f} | tipo={tipo} | area={bw_real*bh_real} | w={bw_real} h={bh_real} | ratio={round(bw_real/bh_real,2) if bh_real>0 else 0}")
 
             cv2.rectangle(frame_resultado, (x_real, y_real), (x_real+bw_real, y_real+bh_real), (0, 140, 255), 2)
             cv2.putText(frame_resultado, f"{tipo} {val:.2f}", (x_real, y_real-5),

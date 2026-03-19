@@ -26,7 +26,7 @@ import os
 # ── ROI ───────────────────────────────────────────────────────────────
 # Excluye HUD (top 60px) y zona de Kong (x < 250) para evitar confundir
 # el pelaje marrón de Kong con muros de madera.
-ROI = (250, 60, 960, 510)
+ROI = (200, 60, 960, 510)
 
 # ── HSV madera ────────────────────────────────────────────────────────
 # Naranja/dorado intenso. S_min=150 excluye troncos de árbol (S~100-120)
@@ -50,8 +50,7 @@ PIEDRA_RATIO_HW_MAX = 7.0
 SOLIDEZ_MIN         = 0.45
 
 # ── Template matching ─────────────────────────────────────────────────
-UMBRAL_MADERA = 0.28
-UMBRAL_PIEDRA = 0.22
+UMBRAL = 0.62
 ESCALAS       = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4]
 MARGEN_BLOB   = 15
 
@@ -167,7 +166,7 @@ class DetectorMuros:
             a_s = cv2.resize(alpha,         (nw, nh))
             res = cv2.matchTemplate(recorte, t_s, cv2.TM_CCOEFF_NORMED, mask=a_s)
             _, val, _, _ = cv2.minMaxLoc(res)
-            if val > mejor:
+            if np.isfinite(val) and val > mejor:
                 mejor = val
         return mejor
 
@@ -175,7 +174,7 @@ class DetectorMuros:
     def detectar_muros(self, frame):
         """
         Retorna:
-          muros   : lista de dicts {tipo, cx, cy, altura, ancho, confianza, rect}
+          muros   : lista de dicts {cx, cy, altura, ancho, confianza, rect}
           frame_r : frame anotado
           mascaras: {"madera": mask, "piedra": mask}
         """
@@ -202,22 +201,20 @@ class DetectorMuros:
 
         # Verificar con template
         candidatos = (
-            [(b, "madera", self.tpl_madera, UMBRAL_MADERA) for b in blobs_m] +
-            [(b, "piedra", self.tpl_piedra, UMBRAL_PIEDRA) for b in blobs_p]
+            [(b, self.tpl_madera) for b in blobs_m] +
+            [(b, self.tpl_piedra) for b in blobs_p]
         )
 
         muros = []
-        COLORES = {"madera": (0, 140, 255), "piedra": (200, 200, 200)}
 
-        for (bx, by, bw, bh), tipo, tpl, umbral in candidatos:
+        for (bx, by, bw, bh), tpl in candidatos:
             conf = self._match_blob(roi_gris, bx, by, bw, bh, tpl)
-            if conf < umbral:
+            if conf < UMBRAL:
                 continue
             xr, yr = x0 + bx, y0 + by
             cx = (xr + bw / 2) / frame.shape[1]
             cy = (yr + bh / 2) / frame.shape[0]
             muros.append({
-                "tipo":      tipo,
                 "cx":        cx,
                 "cy":        cy,
                 "altura":    bh,
@@ -225,14 +222,11 @@ class DetectorMuros:
                 "confianza": conf,
                 "rect":      (xr, yr, bw, bh),
             })
-            color = COLORES[tipo]
-            cv2.rectangle(frame_r, (xr, yr), (xr+bw, yr+bh), color, 2)
-            cv2.putText(frame_r, f"{tipo} {conf:.2f}  h={bh}px",
-                        (xr, yr - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            cv2.rectangle(frame_r, (xr, yr), (xr+bw, yr+bh), (0, 140, 255), 2)
+            cv2.putText(frame_r, f"muro {conf:.2f}",
+                        (xr, yr - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 140, 255), 1)
 
-        nm = sum(1 for m in muros if m["tipo"] == "madera")
-        np_ = sum(1 for m in muros if m["tipo"] == "piedra")
-        cv2.putText(frame_r, f"Muros  madera:{nm}  piedra:{np_}",
+        cv2.putText(frame_r, f"Muros: {len(muros)}",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                     (0, 0, 255) if muros else (0, 200, 0), 2)
 
@@ -255,10 +249,11 @@ class DetectorMuros:
                 continue
 
             muros, frame_r, masks = self.detectar_muros(frame)
+            '''
             if muros:
                 for m in muros:
-                    print(f"🧱 {m['tipo']:6s}  cx={m['cx']:.2f}  h={m['altura']}px  conf={m['confianza']:.2f}")
-
+                    print(f"🧱 cx={m['cx']:.2f}  h={m['altura']}px  conf={m['confianza']:.2f}")
+            '''
             cv2.imshow("Muros", frame_r)
             cv2.moveWindow("Muros", 100, 100)
 

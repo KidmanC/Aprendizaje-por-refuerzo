@@ -2,13 +2,16 @@
 entorno.py — Entorno Gymnasium simplificado para Banana Kong RL
 Resolución BlueStacks: 960x540
 
-Observación (6 valores normalizados [0,1]):
+Observación (9 valores normalizados [0,1]):
     [0] kong_cx
     [1] kong_cy
     [2] banana1_cx  (banana más cercana a Kong)
     [3] banana1_cy
     [4] banana2_cx
     [5] banana2_cy
+    [6] hay_agua (0 o 1)
+    [7] barril1_cx  (barril más cercano a Kong)
+    [8] barril1_cy
 
 Acciones (Discrete 4):
     0 - NADA
@@ -35,7 +38,7 @@ from controles.acciones import ModuloAcciones, NADA, PLANEAR, DASH, BAJAR
 MAX_STEPS      = 2000
 DELAY_ACCION   = 0.05
 DELAY_REINICIO = 3.0
-OBS_SIZE       = 6
+OBS_SIZE       = 9
 MARGEN_KONG    = 10
 
 
@@ -129,20 +132,33 @@ class BananaKongEnv(gym.Env):
     def _estado_a_obs(self, estado):
         obs = np.zeros(OBS_SIZE, dtype=np.float32)
 
-        # Kong
+        # Kong posición
         if estado["kong"]:
-            obs[0], obs[1] = estado["kong"]
+            kong_cx, kong_cy = estado["kong"]
         else:
-            obs[0], obs[1] = 0.3, 0.5  # posición típica de Kong
+            kong_cx, kong_cy = 0.3, 0.5
+        obs[0] = kong_cx
+        obs[1] = kong_cy
 
-        # Bananas más cercanas a Kong
+        # Bananas — distancia horizontal relativa a Kong (positivo = a la derecha)
         bananas = sorted(
             estado["bananas"]["posiciones"],
-            key=lambda p: abs(p[0] - obs[0])
+            key=lambda p: abs(p[0] - kong_cx)
         )
         for i, (cx, cy) in enumerate(bananas[:2]):
-            obs[2 + i*2] = cx
+            obs[2 + i*2] = np.clip(cx - kong_cx + 0.5, 0.0, 1.0)  # centrado en 0.5
             obs[3 + i*2] = cy
+
+        obs[6] = 1.0 if estado.get("agua") else 0.0
+
+        # Barril más cercano — distancia horizontal relativa
+        barriles = sorted(
+            estado.get("barriles", []),
+            key=lambda p: abs(p[0] - kong_cx)
+        )
+        if barriles:
+            obs[7] = np.clip(barriles[0][0] - kong_cx + 0.5, 0.0, 1.0)
+            obs[8] = barriles[0][1]
 
         return obs
 
@@ -159,13 +175,17 @@ class BananaKongEnv(gym.Env):
         tpl_play_again = self._cargar_template(os.path.join(tpl_dir, "play_again.png"))
 
         print("Esperando pantalla Revive...")
-        time.sleep(4.5)
+        time.sleep(5.5)  # +1s extra
 
-        if not self._esperar_y_clicar(tpl_flecha, timeout=8.0, etiqueta="flecha"):
-            print("Flecha no encontrada, continuando...")
-        time.sleep(1.0)
-        if not self._esperar_y_clicar(tpl_play_again, timeout=8.0, etiqueta="Play Again"):
-            print("Play Again no encontrado, continuando...")
+        if not self._esperar_y_clicar(tpl_flecha, timeout=9.0, etiqueta="flecha"):
+            print("Flecha no encontrada — presionando W como fallback...")
+            pyautogui.press('w')
+        time.sleep(2.0)  # +1s extra
+
+        if not self._esperar_y_clicar(tpl_play_again, timeout=9.0, etiqueta="Play Again"):
+            print("Play Again no encontrado — presionando W como fallback...")
+            pyautogui.press('w')
+        time.sleep(1.0)  # +1s extra
 
         # Resetear tracker DESPUÉS de Play Again — el juego ya está cargando
         self.perceptor.det_kong.reset()

@@ -98,7 +98,7 @@ class DetectorAgua:
         if not zonas_agua:
             cv2.putText(frame_resultado, "Agua: NO", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 0), 2)
-            return False, None, frame_resultado, mascara
+            return False, None, frame_resultado, mascara, []
 
         # Calcular posición horizontal del centro del agua
         total_area = sum(z[4] for z in zonas_agua)
@@ -116,7 +116,8 @@ class DetectorAgua:
                     f"AGUA detectada  cx={cx_norm:.2f}",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
 
-        return True, cx_norm, frame_resultado, mascara
+        rects = [(ax + x0, ay + y0, aw, ah) for (ax, ay, aw, ah, _) in zonas_agua]
+        return True, cx_norm, frame_resultado, mascara, rects
 
     # ─────────────────────────────────────────
     def probar(self):

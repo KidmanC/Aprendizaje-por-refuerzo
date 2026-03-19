@@ -16,7 +16,7 @@ import time
 import os
 
 # ── Configuración ────────────────────────────────────────────────────
-ROI = (0, 60, 420, 510)
+ROI = (0, 0, 420, 510)
 
 KONG_HSV_BAJO = np.array([5, 80, 50])
 KONG_HSV_ALTO = np.array([25, 170, 180])
@@ -202,6 +202,21 @@ class DetectorKong:
             ok, bbox = self.tracker.update(frame)
             if ok:
                 x, y, w, h = [int(v) for v in bbox]
+
+                # Validar que el bbox esté dentro del ROI
+                rx0, ry0, rx1, ry1 = ROI
+                if x < rx0 or y < ry0 or x+w > rx1 or y+h > ry1:
+                    ok = False
+                # Validar tamaño razonable
+                elif w < 20 or h < 20 or w > 250 or h > 250:
+                    ok = False
+                # Validar que no se haya ido demasiado a la izquierda
+                elif self.posicion_anterior is not None:
+                    cx_nuevo = (x + w/2) / frame.shape[1]
+                    if cx_nuevo < 0.05:
+                        ok = False
+
+            if ok:
                 rect_px = (x, y, w, h)
                 cx = (x + w / 2) / frame.shape[1]
                 cy = (y + h / 2) / frame.shape[0]
@@ -215,7 +230,6 @@ class DetectorKong:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 165, 255), 1)
                 return (cx, cy), frame_resultado, self._pose_anterior, rect_px, 1.0
             else:
-                # Tracker perdió a Kong — reinicializar con HSV+template
                 self._tracker_activo = False
                 self._frames_sin_deteccion = 0
 

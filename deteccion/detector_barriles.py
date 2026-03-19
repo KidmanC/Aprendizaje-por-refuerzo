@@ -16,7 +16,7 @@ import time
 import os
 
 # ROI — empieza donde termina Kong (tercio izquierdo excluido)
-ROI = (250, 80, 900, 480)
+ROI = (160, 80, 900, 480)
 
 # HSV del barril — interior brillante con V alto (distingue del suelo oscuro)
 BARRIL_HSV_BAJO = np.array([8,  80, 160])
@@ -24,13 +24,20 @@ BARRIL_HSV_ALTO = np.array([22, 240, 255])
 
 BARRIL_AREA_MIN = 600
 BARRIL_AREA_MAX = 6000
-RATIO_MIN = 0.6
-RATIO_MAX = 1.6
+RATIO_MIN = 0.9  #0.6
+RATIO_MAX = 1.4
 SOLIDEZ_MIN = 0.60
 MARGEN_BLOB = 12
 UMBRAL = 0.75
 ESCALAS = [0.8, 0.9, 1.0, 1.1, 1.2]
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+
+TEMPLATES_ARCHIVOS = [
+    "barril-bg.png",
+    "barril2-bg.png",
+    "barril3-bg.png",
+    "barril4-bg.png",
+]
 
 
 class DetectorBarriles:
@@ -40,19 +47,22 @@ class DetectorBarriles:
         self.sct = mss()
         self.actualizar_ventana()
 
-        ruta = os.path.join(TEMPLATES_DIR, "barril-bg.png")
-        img = cv2.imread(ruta, cv2.IMREAD_UNCHANGED)
-        if img is None:
-            raise FileNotFoundError(f"No se encontró: {ruta}")
+        self.templates = []
+        for filename in TEMPLATES_ARCHIVOS:
+            ruta = os.path.join(TEMPLATES_DIR, filename)
+            img = cv2.imread(ruta, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                print(f"⚠️  No se encontró: {ruta}")
+                continue
+            if img.shape[2] == 4:
+                alpha = img[:, :, 3]
+                gris  = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
+            else:
+                gris  = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                alpha = None
+            self.templates.append((gris, alpha))
 
-        if img.shape[2] == 4:
-            self.alpha = img[:, :, 3]
-            self.template = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
-        else:
-            self.template = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            self.alpha = None
-
-        print(f"✅ Template barril: {self.template.shape[1]}x{self.template.shape[0]}px")
+        print(f"✅ {len(self.templates)} templates de barril cargados")
 
     def actualizar_ventana(self):
         ventanas = gw.getWindowsWithTitle(self.titulo)
@@ -113,21 +123,21 @@ class DetectorBarriles:
         recorte = roi_gris[by0:by1, bx0:bx1]
 
         mejor_val = 0
-        for escala in ESCALAS:
-            h_t, w_t = self.template.shape
-            nw, nh = int(w_t * escala), int(h_t * escala)
-            if nw >= recorte.shape[1] or nh >= recorte.shape[0]:
-                continue
-            t_scaled = cv2.resize(self.template, (nw, nh))
-            if self.alpha is not None:
-                a_scaled = cv2.resize(self.alpha, (nw, nh))
-                res = cv2.matchTemplate(recorte, t_scaled, cv2.TM_SQDIFF_NORMED, mask=a_scaled)
-            else:
-                res = cv2.matchTemplate(recorte, t_scaled, cv2.TM_SQDIFF_NORMED)
-            min_val, _, _, _ = cv2.minMaxLoc(res)
-            val = 1.0 - min_val
-            if val > mejor_val:
-                mejor_val = val
+        for template, alpha in self.templates:
+            h_t, w_t = template.shape
+            for escala in ESCALAS:
+                nw, nh = int(w_t * escala), int(h_t * escala)
+                if nw >= recorte.shape[1] or nh >= recorte.shape[0]:
+                    continue
+                t_scaled = cv2.resize(template, (nw, nh))
+                if alpha is not None:
+                    a_scaled = cv2.resize(alpha, (nw, nh))
+                    res = cv2.matchTemplate(recorte, t_scaled, cv2.TM_CCOEFF_NORMED, mask=a_scaled)
+                else:
+                    res = cv2.matchTemplate(recorte, t_scaled, cv2.TM_CCOEFF_NORMED)
+                _, val, _, _ = cv2.minMaxLoc(res)
+                if val > mejor_val:
+                    mejor_val = val
         return mejor_val
 
     def detectar_barriles(self, frame):
@@ -156,7 +166,7 @@ class DetectorBarriles:
             x_real, y_real = bx + x0, by + y0
             cx = (x_real + bw/2) / frame.shape[1]
             cy = (y_real + bh/2) / frame.shape[0]
-            barriles.append((cx, cy))
+            barriles.append((cx, cy, (x_real, y_real, bw, bh)))
 
             cv2.rectangle(frame_resultado, (x_real, y_real), (x_real+bw, y_real+bh), (0, 0, 255), 2)
             cv2.putText(frame_resultado, f"Barril {val:.2f}", (x_real, y_real-5),
